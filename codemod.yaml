@@ -1,8 +1,8 @@
 schema_version: "1.0"
 
 name: "bytestrone-ef-migration-assessment-bundle"
-version: "1.0.7"
-description: "Enterprise Codemod Insights Metrics Emitter scanning .NET solutions for ef_risk_score, ef_objectcontext_usages, ef_execute_sql_command_calls, ef_database_set_initializer_calls, and ef_entity_type_configuration_classes with automated HTML report generation."
+version: "1.0.8"
+description: "Consolidated single-step Codemod Insights metrics emitter scanning .NET solutions for all metrics under step analyze-dbcontext-and-orm-patterns."
 author: "bijo abraham"
 license: "MIT"
 

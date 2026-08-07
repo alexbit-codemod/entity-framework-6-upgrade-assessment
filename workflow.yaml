@@ -3,51 +3,19 @@
 version: "1"
 
 nodes:
-  - id: assess-ef-packages
-    name: "Scan & Inventory EF Dependencies"
-    type: automatic
-    steps:
-      - name: "Scan packages.config, .csproj, and .config files for EF packages and provider assemblies"
-        js-ast-grep:
-          js_file: scripts/assess-packages.ts
-          base_path: "."
-          language: "csharp"
-          include:
-            - "**/*.cs"
-            - "**/*.csproj"
-            - "**/*.config"
-          exclude:
-            - "**/node_modules/**"
-            - "**/bin/**"
-            - "**/obj/**"
-
   - id: analyze-dbcontext-and-orm-patterns
-    name: "Analyze DbContext & Entity Mapping Patterns"
+    name: "Comprehensive EF Migration & ORM Pattern Analysis"
     type: automatic
     steps:
-      - name: "Scan C# source files for DbContext, ObjectContext, IDbSet, and EntityTypeConfiguration"
+      - name: "Scan solution files for EF versions, DbContext, mappings, API risks, and effort metrics"
         js-ast-grep:
           js_file: scripts/assess-code.ts
           base_path: "."
           language: "csharp"
           include:
             - "**/*.cs"
-          exclude:
-            - "**/node_modules/**"
-            - "**/bin/**"
-            - "**/obj/**"
-
-  - id: generate-assessment-report
-    name: "Generate EF Migration Assessment Report"
-    type: automatic
-    steps:
-      - name: "Aggregate findings and generate EF_MIGRATION_ASSESSMENT_REPORT.md and metrics.json"
-        js-ast-grep:
-          js_file: scripts/generate-report.ts
-          base_path: "."
-          language: "csharp"
-          include:
-            - "**/*.cs"
+            - "**/*.csproj"
+            - "**/*.config"
           exclude:
             - "**/node_modules/**"
             - "**/bin/**"
