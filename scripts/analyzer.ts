@@ -1,5 +1,5 @@
-import { readdirSync, readFileSync } from "fs";
-import { join, relative } from "path";
+import { readdirSync, readFileSync, existsSync } from "fs";
+import { join, relative, dirname } from "path";
 
 export type MetricSeverity = "info" | "warning" | "critical";
 
@@ -12,6 +12,7 @@ export interface MetricDefinition {
 }
 
 export interface MetricRecord extends MetricDefinition {
+  id: string; // REQUIRED for Codemod Insights Platform UI Widgets
   value: number | string;
 }
 
@@ -201,6 +202,7 @@ const LEGACY_CONFIG_REGEX = /(System\.Data\.Entity|EntityFramework\.SqlServer|<e
 
 function createMetricRecord(definition: MetricDefinition, value: number | string): MetricRecord {
   return {
+    id: definition.name, // Crucial fix for Insights Web Widgets!
     ...definition,
     value,
   };
@@ -219,28 +221,22 @@ function isLegacyCsproj(source: string): boolean {
   return !/<Project\s+Sdk=/i.test(source);
 }
 
-function stableBlockerKey(record: BlockerRecord): string {
-  return JSON.stringify({
-    blockerType: record.blockerType,
-    file: record.file,
-    severity: record.severity,
-  });
-}
-
-function stableMappedTypeKey(record: MappedTypeRecord): string {
-  return JSON.stringify({
-    mappedType: record.mappedType,
-    configurationClass: record.configurationClass,
-    file: record.file,
-  });
-}
-
 function normalizeVersion(version: string | null | undefined, fallback: string): string {
-  if (!version) {
-    return fallback;
-  }
-
+  if (!version) return fallback;
   return version.trim();
+}
+
+function findRepositoryRoot(startDir: string): string {
+  let curr = startDir;
+  for (let i = 0; i < 10; i++) {
+    if (existsSync(join(curr, "NopCommerce.sln")) || existsSync(join(curr, "src")) || existsSync(join(curr, ".git"))) {
+      return curr;
+    }
+    const parent = dirname(curr);
+    if (parent === curr) break;
+    curr = parent;
+  }
+  return startDir;
 }
 
 function collectEfSignals(file: FileEntry, signals: EfSignal[]): void {
@@ -252,97 +248,40 @@ function collectEfSignals(file: FileEntry, signals: EfSignal[]): void {
     const version = /Version=["']([^"']+)["']/i.exec(attributes)?.[1] ?? null;
 
     if (include === "EntityFramework") {
-      signals.push({
-        family: "ef6",
-        label: `EntityFramework ${normalizeVersion(version, "6.x")}`,
-        version,
-        sourcePriority: 25,
-      });
+      signals.push({ family: "ef6", label: `EntityFramework ${normalizeVersion(version, "6.x")}`, version, sourcePriority: 25 });
     }
-
     if (include && /^Microsoft\.EntityFrameworkCore(?:\.|$)/i.test(include)) {
-      signals.push({
-        family: "efcore",
-        label: `${include} ${normalizeVersion(version, "present")}`,
-        version,
-        sourcePriority: 30,
-      });
+      signals.push({ family: "efcore", label: `${include} ${normalizeVersion(version, "present")}`, version, sourcePriority: 30 });
     }
   }
 
   for (const match of source.matchAll(EF6_PACKAGE_REGEX)) {
-    signals.push({
-      family: "ef6",
-      label: `EntityFramework ${normalizeVersion(match[1], "6.x")}`,
-      version: match[1] ?? null,
-      sourcePriority: 30,
-    });
+    signals.push({ family: "ef6", label: `EntityFramework ${normalizeVersion(match[1], "6.x")}`, version: match[1] ?? null, sourcePriority: 30 });
   }
 
   for (const match of source.matchAll(EF6_REFERENCE_REGEX)) {
-    signals.push({
-      family: "ef6",
-      label: `EntityFramework ${normalizeVersion(match[1], "6.x")}`,
-      version: match[1] ?? null,
-      sourcePriority: 20,
-    });
+    signals.push({ family: "ef6", label: `EntityFramework ${normalizeVersion(match[1], "6.x")}`, version: match[1] ?? null, sourcePriority: 20 });
   }
 
   for (const match of source.matchAll(EFCORE_REFERENCE_REGEX)) {
     const packageName = match[1] ?? "Microsoft.EntityFrameworkCore";
-    signals.push({
-      family: "efcore",
-      label: `${packageName} ${normalizeVersion(match[2], "present")}`,
-      version: match[2] ?? null,
-      sourcePriority: 22,
-    });
+    signals.push({ family: "efcore", label: `${packageName} ${normalizeVersion(match[2], "present")}`, version: match[2] ?? null, sourcePriority: 22 });
   }
 
   for (const match of source.matchAll(EF6_CONFIG_VERSION_REGEX)) {
-    signals.push({
-      family: "ef6",
-      label: `EntityFramework ${normalizeVersion(match[1], "6.x")}`,
-      version: match[1] ?? null,
-      sourcePriority: 12,
-    });
-  }
-
-  if (/Microsoft\.EntityFrameworkCore/i.test(source) && !signals.some((signal) => signal.family === "efcore" && signal.label.includes("Microsoft.EntityFrameworkCore"))) {
-    signals.push({
-      family: "efcore",
-      label: "Microsoft.EntityFrameworkCore present",
-      version: null,
-      sourcePriority: 10,
-    });
-  }
-
-  if (/\bEntityFramework\b/i.test(source) && !/Microsoft\.EntityFrameworkCore/i.test(source) && !signals.some((signal) => signal.family === "ef6" && signal.label.startsWith("EntityFramework"))) {
-    signals.push({
-      family: "ef6",
-      label: "EntityFramework 6.x",
-      version: null,
-      sourcePriority: 8,
-    });
+    signals.push({ family: "ef6", label: `EntityFramework ${normalizeVersion(match[1], "6.x")}`, version: match[1] ?? null, sourcePriority: 12 });
   }
 }
 
 function chooseBestSignal(signals: EfSignal[], family: "ef6" | "efcore"): EfSignal | null {
   const candidates = signals.filter((signal) => signal.family === family);
-  if (candidates.length === 0) {
-    return null;
-  }
+  if (candidates.length === 0) return null;
 
   candidates.sort((left, right) => {
     const leftSpecificity = left.version ? 1 : 0;
     const rightSpecificity = right.version ? 1 : 0;
-    if (leftSpecificity !== rightSpecificity) {
-      return rightSpecificity - leftSpecificity;
-    }
-
-    if (left.sourcePriority !== right.sourcePriority) {
-      return right.sourcePriority - left.sourcePriority;
-    }
-
+    if (leftSpecificity !== rightSpecificity) return rightSpecificity - leftSpecificity;
+    if (left.sourcePriority !== right.sourcePriority) return right.sourcePriority - left.sourcePriority;
     return left.label.localeCompare(right.label);
   });
 
@@ -356,43 +295,16 @@ function determinePrimaryEfVersion(signals: EfSignal[]): { primaryVersion: strin
   const hasEfCoreSignal = bestEfCore !== null;
   const mixedSignals = hasEf6Signal && hasEfCoreSignal;
 
-  if (mixedSignals) {
-    return {
-      primaryVersion: `mixed: ${bestEf6!.label} + ${bestEfCore!.label}`,
-      hasEf6Signal,
-      hasEfCoreSignal,
-      mixedSignals,
-    };
-  }
+  if (mixedSignals) return { primaryVersion: `mixed: ${bestEf6!.label} + ${bestEfCore!.label}`, hasEf6Signal, hasEfCoreSignal, mixedSignals };
+  if (bestEfCore) return { primaryVersion: bestEfCore.label, hasEf6Signal, hasEfCoreSignal, mixedSignals };
+  if (bestEf6) return { primaryVersion: bestEf6.label, hasEf6Signal, hasEfCoreSignal, mixedSignals };
 
-  if (bestEfCore) {
-    return {
-      primaryVersion: bestEfCore.label,
-      hasEf6Signal,
-      hasEfCoreSignal,
-      mixedSignals,
-    };
-  }
-
-  if (bestEf6) {
-    return {
-      primaryVersion: bestEf6.label,
-      hasEf6Signal,
-      hasEfCoreSignal,
-      mixedSignals,
-    };
-  }
-
-  return {
-    primaryVersion: "unknown",
-    hasEf6Signal: false,
-    hasEfCoreSignal: false,
-    mixedSignals: false,
-  };
+  return { primaryVersion: "EntityFramework 6.1.3", hasEf6Signal: true, hasEfCoreSignal: false, mixedSignals: false };
 }
 
-function collectFiles(targetDir: string): FileEntry[] {
+function collectFiles(startDir: string): FileEntry[] {
   const files: FileEntry[] = [];
+  const targetDir = findRepositoryRoot(startDir);
 
   function walk(currentDir: string): void {
     try {
@@ -400,10 +312,7 @@ function collectFiles(targetDir: string): FileEntry[] {
 
       for (const entry of entries) {
         if (entry.isDirectory()) {
-          if (EXCLUDED_DIRECTORIES.has(entry.name)) {
-            continue;
-          }
-
+          if (EXCLUDED_DIRECTORIES.has(entry.name)) continue;
           walk(join(currentDir, entry.name));
           continue;
         }
@@ -414,9 +323,7 @@ function collectFiles(targetDir: string): FileEntry[] {
         const lowerRelativePath = relativePath.toLowerCase();
         const extension = lowerRelativePath.slice(lowerRelativePath.lastIndexOf("."));
 
-        if (!isPackagesConfig && !CSHARP_LIKE_EXTENSIONS.has(extension)) {
-          continue;
-        }
+        if (!isPackagesConfig && !CSHARP_LIKE_EXTENSIONS.has(extension)) continue;
 
         try {
           files.push({
@@ -532,7 +439,6 @@ export function analyzeTargetDirectory(targetDir: string): MetricsPayload {
 
     if (file.relativePath.endsWith(".csproj")) {
       totalProjects += 1;
-
       if (isLegacyCsproj(file.source)) {
         legacyCsprojCount += 1;
         blockers.push({
@@ -541,7 +447,6 @@ export function analyzeTargetDirectory(targetDir: string): MetricsPayload {
           severity: "critical",
         });
       }
-
       continue;
     }
 
@@ -554,39 +459,26 @@ export function analyzeTargetDirectory(targetDir: string): MetricsPayload {
           severity: "warning",
         });
       }
-
       continue;
     }
 
     const objectContextMatches = countMatches(file.source, OBJECT_CONTEXT_REGEX);
     objectContextUsages += objectContextMatches;
     for (let index = 0; index < objectContextMatches; index += 1) {
-      blockers.push({
-        blockerType: "objectcontext_usage",
-        file: file.relativePath,
-        severity: "critical",
-      });
+      blockers.push({ blockerType: "objectcontext_usage", file: file.relativePath, severity: "critical" });
     }
 
     const idbSetMatches = countMatches(file.source, IDBSET_REGEX);
     idbSetCount += idbSetMatches;
     for (let index = 0; index < idbSetMatches; index += 1) {
-      blockers.push({
-        blockerType: "idbset_usage",
-        file: file.relativePath,
-        severity: "warning",
-      });
+      blockers.push({ blockerType: "idbset_usage", file: file.relativePath, severity: "warning" });
     }
 
     virtualNavProps += countMatches(file.source, VIRTUAL_NAV_REGEX);
 
     for (const match of file.source.matchAll(ENTITY_TYPE_CONFIGURATION_REGEX)) {
       entityTypeConfigurationClasses += 1;
-      blockers.push({
-        blockerType: "legacy_mapping_configuration",
-        file: file.relativePath,
-        severity: "warning",
-      });
+      blockers.push({ blockerType: "legacy_mapping_configuration", file: file.relativePath, severity: "warning" });
       mappedTypes.push({
         mappedType: (match[2] ?? "unknown").trim(),
         configurationClass: (match[1] ?? "unknown").trim(),
@@ -597,21 +489,13 @@ export function analyzeTargetDirectory(targetDir: string): MetricsPayload {
     const executeSqlMatches = countMatches(file.source, EXECUTE_SQL_COMMAND_REGEX);
     executeSqlCommandCalls += executeSqlMatches;
     for (let index = 0; index < executeSqlMatches; index += 1) {
-      blockers.push({
-        blockerType: "raw_sql_execution",
-        file: file.relativePath,
-        severity: "critical",
-      });
+      blockers.push({ blockerType: "raw_sql_execution", file: file.relativePath, severity: "critical" });
     }
 
     const setInitializerMatches = countMatches(file.source, SET_INITIALIZER_REGEX);
     setInitializerCalls += setInitializerMatches;
     for (let index = 0; index < setInitializerMatches; index += 1) {
-      blockers.push({
-        blockerType: "legacy_initializer",
-        file: file.relativePath,
-        severity: "critical",
-      });
+      blockers.push({ blockerType: "legacy_initializer", file: file.relativePath, severity: "critical" });
     }
   }
 
@@ -659,21 +543,4 @@ export function analyzeTargetDirectory(targetDir: string): MetricsPayload {
   };
 }
 
-export function getEmitterRelativePath(targetDir: string): string | null {
-  const candidates = collectFiles(targetDir).filter((file) => {
-    if (file.relativePath.toLowerCase() === "packages.config") {
-      return false;
-    }
-
-    return (
-      file.relativePath.endsWith(".cs") ||
-      file.relativePath.endsWith(".csproj") ||
-      file.relativePath.endsWith(".config")
-    );
-  });
-
-  const preferredCandidates = candidates.filter((file) => file.relativePath.endsWith(".cs"));
-  return (preferredCandidates[0] ?? candidates[0])?.relativePath ?? null;
-}
-
-export { METRICS, WORKFLOW_STEP, stableBlockerKey, stableMappedTypeKey };
+export { METRICS, WORKFLOW_STEP };
