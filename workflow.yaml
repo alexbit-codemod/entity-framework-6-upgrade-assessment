@@ -7,15 +7,13 @@ nodes:
     name: "Comprehensive EF Migration & ORM Pattern Analysis"
     type: automatic
     steps:
-      - name: "Scan solution files for EF versions, DbContext, mappings, API risks, and effort metrics"
+      - name: "Scan C# source files for EF versions, DbContext, mappings, API risks, and effort metrics"
         js-ast-grep:
           js_file: scripts/assess-code.ts
           base_path: "."
           language: "csharp"
           include:
             - "**/*.cs"
-            - "**/*.csproj"
-            - "**/*.config"
           exclude:
             - "**/node_modules/**"
             - "**/bin/**"
