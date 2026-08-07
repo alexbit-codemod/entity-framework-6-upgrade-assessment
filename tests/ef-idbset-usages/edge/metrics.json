@@ -1,0 +1,28 @@
+{
+  "ef_idbset_usages": [
+    {
+      "cardinality": {
+        "filepath": "input.cs",
+        "linenumber": "14",
+        "typeArgument": "Product"
+      },
+      "count": 1
+    },
+    {
+      "cardinality": {
+        "filepath": "input.cs",
+        "linenumber": "7",
+        "typeArgument": "Product"
+      },
+      "count": 1
+    },
+    {
+      "cardinality": {
+        "filepath": "input.cs",
+        "linenumber": "9",
+        "typeArgument": "Product"
+      },
+      "count": 1
+    }
+  ]
+}

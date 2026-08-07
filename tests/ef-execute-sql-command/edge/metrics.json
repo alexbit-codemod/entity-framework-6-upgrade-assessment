@@ -1,0 +1,11 @@
+{
+  "ef_execute_sql_command": [
+    {
+      "cardinality": {
+        "filepath": "input.cs",
+        "linenumber": "9"
+      },
+      "count": 1
+    }
+  ]
+}

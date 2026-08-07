@@ -1,0 +1,25 @@
+{
+  "ef_objectcontext_usages": [
+    {
+      "cardinality": {
+        "filepath": "input.cs",
+        "linenumber": "5"
+      },
+      "count": 1
+    },
+    {
+      "cardinality": {
+        "filepath": "input.cs",
+        "linenumber": "7"
+      },
+      "count": 1
+    },
+    {
+      "cardinality": {
+        "filepath": "input.cs",
+        "linenumber": "9"
+      },
+      "count": 1
+    }
+  ]
+}

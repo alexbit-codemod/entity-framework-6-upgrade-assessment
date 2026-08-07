@@ -1,26 +1,29 @@
 schema_version: "1.0"
 
 name: "bytestrone-ef-migration-assessment-bundle"
-version: "1.0.14"
-description: "Read-only Entity Framework migration assessment miner scanning .NET repositories for EF6/EF Core readiness, API risks, and effort metrics."
+version: "1.1.0"
+description: "Read-only Entity Framework 6 migration assessment miner using native JSSG metrics."
 author: "bijo abraham"
 license: "MIT"
 
 targets:
   languages:
     - "csharp"
-    - "javascript"
-    - "html"
-    - "xml"
 
-keywords: ["mining", "assessment", "ef-migration", "insights", "dotnet"]
+keywords:
+  - "mining"
+  - "assessment"
+  - "ef-migration"
+  - "insights"
+  - "dotnet"
+  - "ef6"
+  - "metrics"
 
 registry:
-  access: "private"
-  visibility: "private"
+  access: "public"
+  visibility: "public"
 
-capabilities:
-  - "fs"
+capabilities: []
 
 workflows:
   - name: main

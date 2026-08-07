@@ -1,0 +1,22 @@
+{
+  "ef_entity_type_configuration": [
+    {
+      "cardinality": {
+        "configurationClass": "CustomerConfiguration",
+        "filepath": "input.cs",
+        "linenumber": "5",
+        "mappedType": "Customer"
+      },
+      "count": 1
+    },
+    {
+      "cardinality": {
+        "configurationClass": "OrderConfiguration",
+        "filepath": "input.cs",
+        "linenumber": "9",
+        "mappedType": "Order"
+      },
+      "count": 1
+    }
+  ]
+}

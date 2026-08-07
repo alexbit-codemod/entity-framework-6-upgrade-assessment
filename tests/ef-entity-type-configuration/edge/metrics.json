@@ -1,0 +1,13 @@
+{
+  "ef_entity_type_configuration": [
+    {
+      "cardinality": {
+        "configurationClass": "ProductConfiguration",
+        "filepath": "input.cs",
+        "linenumber": "3",
+        "mappedType": "Product"
+      },
+      "count": 1
+    }
+  ]
+}

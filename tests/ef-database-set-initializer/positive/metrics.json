@@ -1,0 +1,18 @@
+{
+  "ef_database_set_initializer": [
+    {
+      "cardinality": {
+        "filepath": "input.cs",
+        "linenumber": "10"
+      },
+      "count": 1
+    },
+    {
+      "cardinality": {
+        "filepath": "input.cs",
+        "linenumber": "9"
+      },
+      "count": 1
+    }
+  ]
+}

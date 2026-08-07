@@ -1,0 +1,22 @@
+{
+  "ef_virtual_nav_props": [
+    {
+      "cardinality": {
+        "filepath": "input.cs",
+        "linenumber": "7",
+        "propertyName": "Customer",
+        "typeName": "Customer"
+      },
+      "count": 1
+    },
+    {
+      "cardinality": {
+        "filepath": "input.cs",
+        "linenumber": "8",
+        "propertyName": "Lines",
+        "typeName": "List<OrderLine>"
+      },
+      "count": 1
+    }
+  ]
+}

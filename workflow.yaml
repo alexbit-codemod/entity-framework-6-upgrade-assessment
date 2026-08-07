@@ -3,18 +3,110 @@
 version: "1"
 
 nodes:
-  - id: analyze-dbcontext-and-orm-patterns
-    name: "Comprehensive EF Migration & ORM Pattern Analysis"
+  - id: ef-objectcontext-usages
+    name: Count ObjectContext usages
     type: automatic
     steps:
-      - name: "Scan C# source files for EF versions, DbContext, mappings, API risks, and effort metrics"
+      - name: "Emit ef_objectcontext_usages metric"
         js-ast-grep:
-          js_file: scripts/assess-code.ts
+          js_file: scripts/ef-objectcontext-usages.ts
           base_path: "."
           language: "csharp"
           include:
             - "**/*.cs"
           exclude:
             - "**/node_modules/**"
+            - "**/dist/**"
+            - "**/build/**"
+            - "**/bin/**"
+            - "**/obj/**"
+
+  - id: ef-idbset-usages
+    name: Count IDbSet usages
+    type: automatic
+    steps:
+      - name: "Emit ef_idbset_usages metric"
+        js-ast-grep:
+          js_file: scripts/ef-idbset-usages.ts
+          base_path: "."
+          language: "csharp"
+          include:
+            - "**/*.cs"
+          exclude:
+            - "**/node_modules/**"
+            - "**/dist/**"
+            - "**/build/**"
+            - "**/bin/**"
+            - "**/obj/**"
+
+  - id: ef-virtual-nav-props
+    name: Count virtual navigation properties
+    type: automatic
+    steps:
+      - name: "Emit ef_virtual_nav_props metric"
+        js-ast-grep:
+          js_file: scripts/ef-virtual-nav-props.ts
+          base_path: "."
+          language: "csharp"
+          include:
+            - "**/*.cs"
+          exclude:
+            - "**/node_modules/**"
+            - "**/dist/**"
+            - "**/build/**"
+            - "**/bin/**"
+            - "**/obj/**"
+
+  - id: ef-entity-type-configuration
+    name: Count EntityTypeConfiguration classes
+    type: automatic
+    steps:
+      - name: "Emit ef_entity_type_configuration metric"
+        js-ast-grep:
+          js_file: scripts/ef-entity-type-configuration.ts
+          base_path: "."
+          language: "csharp"
+          include:
+            - "**/*.cs"
+          exclude:
+            - "**/node_modules/**"
+            - "**/dist/**"
+            - "**/build/**"
+            - "**/bin/**"
+            - "**/obj/**"
+
+  - id: ef-execute-sql-command
+    name: Count ExecuteSqlCommand calls
+    type: automatic
+    steps:
+      - name: "Emit ef_execute_sql_command metric"
+        js-ast-grep:
+          js_file: scripts/ef-execute-sql-command.ts
+          base_path: "."
+          language: "csharp"
+          include:
+            - "**/*.cs"
+          exclude:
+            - "**/node_modules/**"
+            - "**/dist/**"
+            - "**/build/**"
+            - "**/bin/**"
+            - "**/obj/**"
+
+  - id: ef-database-set-initializer
+    name: Count SetInitializer calls
+    type: automatic
+    steps:
+      - name: "Emit ef_database_set_initializer metric"
+        js-ast-grep:
+          js_file: scripts/ef-database-set-initializer.ts
+          base_path: "."
+          language: "csharp"
+          include:
+            - "**/*.cs"
+          exclude:
+            - "**/node_modules/**"
+            - "**/dist/**"
+            - "**/build/**"
             - "**/bin/**"
             - "**/obj/**"
