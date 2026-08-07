@@ -1,0 +1,20 @@
+{
+  "name": "bytestrone-ef-migration-assessment-bundle",
+  "version": "1.0.7",
+  "private": true,
+  "description": "Assessment bundle for Entity Framework migrations across .NET applications",
+  "main": "index.js",
+  "scripts": {
+    "test": "npx codemod jssg test -l csharp ./scripts/assess-code.ts"
+  },
+  "keywords": [
+    "codemod",
+    "entity-framework",
+    "ef6",
+    "ef-core",
+    "assessment",
+    "dotnet"
+  ],
+  "author": "Bytestrone Modernization Team",
+  "license": "MIT"
+}

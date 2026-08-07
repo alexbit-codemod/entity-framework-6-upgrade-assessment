@@ -1,0 +1,27 @@
+schema_version: "1.0"
+
+name: "bytestrone-ef-migration-assessment-bundle"
+version: "1.0.7"
+description: "Enterprise Codemod Insights Metrics Emitter scanning .NET solutions for ef_risk_score, ef_objectcontext_usages, ef_execute_sql_command_calls, ef_database_set_initializer_calls, and ef_entity_type_configuration_classes with automated HTML report generation."
+author: "bijo abraham"
+license: "MIT"
+
+targets:
+  languages:
+    - "csharp"
+    - "javascript"
+    - "html"
+    - "xml"
+
+keywords: ["transformation", "migration", "assessment"]
+
+registry:
+  access: "private"
+  visibility: "private"
+
+capabilities: []
+
+workflows:
+  - name: main
+    default: true
+    path: workflow.yaml
