@@ -1,134 +1,622 @@
-import { writeFileSync } from "fs";
+import { writeFileSync, readdirSync, readFileSync } from "fs";
+import { join, relative } from "path";
 
-export default function transform(root: any, api: any) {
-  const filePath = api.file?.path || root.filename?.() || "";
+export type MetricSeverity = "info" | "warning" | "critical";
 
-  const store = api.store || {};
-  if (!store.metricsStore) {
-    store.metricsStore = {
-      // Risk & Readiness Metrics
-      ef_risk_score: 42,
-      ef65_readiness_score: 100,
-      efcore8_readiness_score: 72,
-      
-      // Architecture & API Metrics
-      ef_objectcontext_usages: 0,
-      ef_execute_sql_command_calls: 12,
-      ef_database_set_initializer_calls: 2,
-      ef_entity_type_configuration_classes: 94,
-      ef_migration_blockers: 14,
-      idbset_count: 94,
-      virtual_nav_props: 120,
+export interface MetricDefinition {
+  name: string;
+  label: string;
+  description: string;
+  category: string;
+  severity: MetricSeverity;
+}
 
-      // Inventory & Dependency Metrics
-      total_projects: 31,
-      legacy_csproj_count: 31,
-      sdk_style_csproj_count: 0,
-      ef6_package_count: 8,
-      ef_version: "6.1.3",
-      target_frameworks: "net451",
+export interface MetricRecord extends MetricDefinition {
+  value: number | string;
+}
 
-      // Effort Calculation
-      estimated_story_points: 195,
-      estimated_dev_hours: 244,
+export interface BlockerRecord {
+  blockerType: string;
+  file: string;
+  severity: MetricSeverity;
+}
 
-      // Cardinality Breakdown Tables
-      blockerTypes: [
-        { blockerType: "ExecuteSqlCommand Call", file: "NopObjectContext.cs", severity: "warning" },
-        { blockerType: "Database.SetInitializer", file: "NopEngine.cs", severity: "warning" },
-        { blockerType: "Legacy Verbose .csproj", file: "Nop.Data.csproj", severity: "critical" }
-      ],
-      mappedTypes: [
-        { mappedType: "Product", configurationClass: "ProductMap", file: "ProductMap.cs" },
-        { mappedType: "Customer", configurationClass: "CustomerMap", file: "CustomerMap.cs" },
-        { mappedType: "Order", configurationClass: "OrderMap", file: "OrderMap.cs" },
-        { mappedType: "Category", configurationClass: "CategoryMap", file: "CategoryMap.cs" }
-      ]
+export interface MappedTypeRecord {
+  mappedType: string;
+  configurationClass: string;
+  file: string;
+}
+
+export interface MetricsPayload {
+  workflowStep: string;
+  metrics: MetricRecord[];
+  cardinality: {
+    blockerTypes: BlockerRecord[];
+    mappedTypes: MappedTypeRecord[];
+  };
+}
+
+interface FileEntry {
+  absolutePath: string;
+  relativePath: string;
+  source: string;
+}
+
+interface EfSignal {
+  family: "ef6" | "efcore";
+  label: string;
+  version: string | null;
+  sourcePriority: number;
+}
+
+interface ScanTotals {
+  totalProjects: number;
+  legacyCsprojCount: number;
+  objectContextUsages: number;
+  idbSetCount: number;
+  virtualNavProps: number;
+  entityTypeConfigurationClasses: number;
+  executeSqlCommandCalls: number;
+  setInitializerCalls: number;
+  legacyConfigBlockers: number;
+  hasEf6Signal: boolean;
+  hasEfCoreSignal: boolean;
+  mixedSignals: boolean;
+}
+
+const WORKFLOW_STEP = "analyze-dbcontext-and-orm-patterns";
+
+const METRICS = {
+  ef65_readiness_score: {
+    name: "ef65_readiness_score",
+    label: "EF 6.5 Upgrade Readiness Index (%)",
+    description: "Estimated readiness for an EF6-to-EF6.5 stabilization pass.",
+    category: "readiness",
+    severity: "warning",
+  },
+  efcore8_readiness_score: {
+    name: "efcore8_readiness_score",
+    label: "EF Core 8 Modernization Readiness Index (%)",
+    description: "Estimated readiness for a full EF6-to-EF Core 8 migration.",
+    category: "readiness",
+    severity: "critical",
+  },
+  ef_risk_score: {
+    name: "ef_risk_score",
+    label: "EF Migration Risk Score (0-100)",
+    description: "Weighted migration risk based on blockers, legacy project format, and risky APIs.",
+    category: "risk",
+    severity: "critical",
+  },
+  total_projects: {
+    name: "total_projects",
+    label: "Total Solution Projects count",
+    description: "Total number of .csproj files discovered in the repository.",
+    category: "inventory",
+    severity: "info",
+  },
+  legacy_csproj_count: {
+    name: "legacy_csproj_count",
+    label: "Legacy verbose .csproj count requiring SDK-style conversion",
+    description: "Projects that still use verbose non-SDK MSBuild structure.",
+    category: "inventory",
+    severity: "warning",
+  },
+  ef_version: {
+    name: "ef_version",
+    label: "Primary EF package version",
+    description: "Best detected Entity Framework version or mixed migration signal.",
+    category: "inventory",
+    severity: "info",
+  },
+  ef_objectcontext_usages: {
+    name: "ef_objectcontext_usages",
+    label: "Legacy ObjectContext class usage count",
+    description: "Occurrences of ObjectContext usage that require major EF Core rework.",
+    category: "blockers",
+    severity: "critical",
+  },
+  idbset_count: {
+    name: "idbset_count",
+    label: "Repository properties using IDbSet<T>",
+    description: "Count of IDbSet<T> declarations that need DbSet<T> migration work.",
+    category: "blockers",
+    severity: "warning",
+  },
+  virtual_nav_props: {
+    name: "virtual_nav_props",
+    label: "Virtual navigation properties relying on lazy loading",
+    description: "Heuristic count of virtual entity navigation properties that imply lazy-loading reliance.",
+    category: "inventory",
+    severity: "warning",
+  },
+  ef_entity_type_configuration_classes: {
+    name: "ef_entity_type_configuration_classes",
+    label: "Fluent API EntityTypeConfiguration<T> class count",
+    description: "Count of legacy EntityTypeConfiguration<T> mapping classes.",
+    category: "blockers",
+    severity: "warning",
+  },
+  ef_execute_sql_command_calls: {
+    name: "ef_execute_sql_command_calls",
+    label: "Raw SQL Database.ExecuteSqlCommand call sites",
+    description: "Count of Database.ExecuteSqlCommand call sites that need API review in EF Core.",
+    category: "blockers",
+    severity: "critical",
+  },
+  ef_database_set_initializer_calls: {
+    name: "ef_database_set_initializer_calls",
+    label: "Database.SetInitializer call sites",
+    description: "Count of legacy Database.SetInitializer calls that do not map directly to EF Core.",
+    category: "blockers",
+    severity: "critical",
+  },
+  ef_migration_blockers: {
+    name: "ef_migration_blockers",
+    label: "Total migration blocker count",
+    description: "Total blocker records emitted across code, project-system, and config patterns.",
+    category: "blockers",
+    severity: "critical",
+  },
+  estimated_story_points: {
+    name: "estimated_story_points",
+    label: "Weighted modernization effort in Story Points",
+    description: "Weighted effort estimate derived from detected blockers and modernization work.",
+    category: "effort",
+    severity: "warning",
+  },
+  estimated_dev_hours: {
+    name: "estimated_dev_hours",
+    label: "Total developer engineering effort in hours",
+    description: "Estimated engineering hours derived from story points using a stable conversion factor.",
+    category: "effort",
+    severity: "warning",
+  },
+} satisfies Record<string, MetricDefinition>;
+
+const EXCLUDED_DIRECTORIES = new Set([
+  ".git",
+  "node_modules",
+  "dist",
+  "build",
+  "bin",
+  "obj",
+]);
+
+const CSHARP_LIKE_EXTENSIONS = new Set([".cs", ".csproj", ".config"]);
+
+const EF6_PACKAGE_REGEX = /<package\s+id=["']EntityFramework["'][^>]*version=["']([^"']+)["']/gi;
+const PACKAGE_REFERENCE_TAG_REGEX = /<PackageReference\b([^>]*)>/gi;
+const EF6_REFERENCE_REGEX = /<Reference[^>]*Include=["']EntityFramework(?:\.[^,"']+)?(?:,\s*Version=([^,"']+))?/gi;
+const EFCORE_REFERENCE_REGEX = /<Reference[^>]*Include=["'](Microsoft\.EntityFrameworkCore(?:\.[^,"']+)*)(?:,\s*Version=([^,"']+))?/gi;
+const EF6_CONFIG_VERSION_REGEX = /EntityFramework(?:\.SqlServer)?[^\n>]*Version=([0-9][^,\"'<\s]*)/gi;
+
+const OBJECT_CONTEXT_REGEX = /\bObjectContext\b/g;
+const IDBSET_REGEX = /\bIDbSet\s*<[^>]+>/g;
+const VIRTUAL_NAV_REGEX = /\bpublic\s+virtual\s+(?!string\b)(?!bool\b)(?!byte\b)(?!char\b)(?!short\b)(?!ushort\b)(?!int\b)(?!uint\b)(?!long\b)(?!ulong\b)(?!float\b)(?!double\b)(?!decimal\b)(?!Guid\b)(?!DateTime\b)(?:[A-Za-z_][\w\.]*)(?:\s*<[^;{}\n]+>)?\s+[A-Za-z_][\w]*\s*\{\s*get\s*;\s*set\s*;\s*\}/g;
+const ENTITY_TYPE_CONFIGURATION_REGEX = /class\s+([A-Za-z_][\w]*)\s*:\s*EntityTypeConfiguration\s*<\s*([^>]+?)\s*>/g;
+const EXECUTE_SQL_COMMAND_REGEX = /\bDatabase\s*\.\s*ExecuteSqlCommand\s*\(/g;
+const SET_INITIALIZER_REGEX = /\bDatabase\s*\.\s*SetInitializer(?:\s*<[^>]+>)?\s*\(/g;
+const LEGACY_CONFIG_REGEX = /(System\.Data\.Entity|EntityFramework\.SqlServer|<entityFramework>|EntityFrameworkSection|DbConfigurationType)/i;
+
+function createMetricRecord(definition: MetricDefinition, value: number | string): MetricRecord {
+  return {
+    ...definition,
+    value,
+  };
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function countMatches(source: string, regex: RegExp): number {
+  const matches = source.match(regex);
+  return matches ? matches.length : 0;
+}
+
+function isLegacyCsproj(source: string): boolean {
+  return !/<Project\s+Sdk=/i.test(source);
+}
+
+function normalizeVersion(version: string | null | undefined, fallback: string): string {
+  if (!version) {
+    return fallback;
+  }
+  return version.trim();
+}
+
+function collectEfSignals(file: FileEntry, signals: EfSignal[]): void {
+  const { source } = file;
+
+  for (const match of source.matchAll(PACKAGE_REFERENCE_TAG_REGEX)) {
+    const attributes = match[1] ?? "";
+    const include = /Include=["']([^"']+)["']/i.exec(attributes)?.[1] ?? null;
+    const version = /Version=["']([^"']+)["']/i.exec(attributes)?.[1] ?? null;
+
+    if (include === "EntityFramework") {
+      signals.push({
+        family: "ef6",
+        label: `EntityFramework ${normalizeVersion(version, "6.x")}`,
+        version,
+        sourcePriority: 25,
+      });
+    }
+
+    if (include && /^Microsoft\.EntityFrameworkCore(?:\.|$)/i.test(include)) {
+      signals.push({
+        family: "efcore",
+        label: `${include} ${normalizeVersion(version, "present")}`,
+        version,
+        sourcePriority: 30,
+      });
+    }
+  }
+
+  for (const match of source.matchAll(EF6_PACKAGE_REGEX)) {
+    signals.push({
+      family: "ef6",
+      label: `EntityFramework ${normalizeVersion(match[1], "6.x")}`,
+      version: match[1] ?? null,
+      sourcePriority: 30,
+    });
+  }
+
+  for (const match of source.matchAll(EF6_REFERENCE_REGEX)) {
+    signals.push({
+      family: "ef6",
+      label: `EntityFramework ${normalizeVersion(match[1], "6.x")}`,
+      version: match[1] ?? null,
+      sourcePriority: 20,
+    });
+  }
+
+  for (const match of source.matchAll(EFCORE_REFERENCE_REGEX)) {
+    const packageName = match[1] ?? "Microsoft.EntityFrameworkCore";
+    signals.push({
+      family: "efcore",
+      label: `${packageName} ${normalizeVersion(match[2], "present")}`,
+      version: match[2] ?? null,
+      sourcePriority: 22,
+    });
+  }
+
+  for (const match of source.matchAll(EF6_CONFIG_VERSION_REGEX)) {
+    signals.push({
+      family: "ef6",
+      label: `EntityFramework ${normalizeVersion(match[1], "6.x")}`,
+      version: match[1] ?? null,
+      sourcePriority: 12,
+    });
+  }
+}
+
+function chooseBestSignal(signals: EfSignal[], family: "ef6" | "efcore"): EfSignal | null {
+  const candidates = signals.filter((signal) => signal.family === family);
+  if (candidates.length === 0) return null;
+
+  candidates.sort((left, right) => {
+    const leftSpecificity = left.version ? 1 : 0;
+    const rightSpecificity = right.version ? 1 : 0;
+    if (leftSpecificity !== rightSpecificity) return rightSpecificity - leftSpecificity;
+    if (left.sourcePriority !== right.sourcePriority) return right.sourcePriority - left.sourcePriority;
+    return left.label.localeCompare(right.label);
+  });
+
+  return candidates[0] ?? null;
+}
+
+function determinePrimaryEfVersion(signals: EfSignal[]): { primaryVersion: string; hasEf6Signal: boolean; hasEfCoreSignal: boolean; mixedSignals: boolean } {
+  const bestEf6 = chooseBestSignal(signals, "ef6");
+  const bestEfCore = chooseBestSignal(signals, "efcore");
+  const hasEf6Signal = bestEf6 !== null;
+  const hasEfCoreSignal = bestEfCore !== null;
+  const mixedSignals = hasEf6Signal && hasEfCoreSignal;
+
+  if (mixedSignals) {
+    return {
+      primaryVersion: `mixed: ${bestEf6!.label} + ${bestEfCore!.label}`,
+      hasEf6Signal,
+      hasEfCoreSignal,
+      mixedSignals,
     };
   }
 
-  const metrics = store.metricsStore;
+  if (bestEfCore) {
+    return {
+      primaryVersion: bestEfCore.label,
+      hasEf6Signal,
+      hasEfCoreSignal,
+      mixedSignals,
+    };
+  }
 
-  try {
-    const text = root.source ? root.source() : "";
+  if (bestEf6) {
+    return {
+      primaryVersion: bestEf6.label,
+      hasEf6Signal,
+      hasEfCoreSignal,
+      mixedSignals,
+    };
+  }
 
-    // 1. Fluent API EntityTypeConfiguration Mappings
-    if (filePath.endsWith(".cs") && text.includes("EntityTypeConfiguration<")) {
-      const match = text.match(/class\s+(\w+)\s*:\s*EntityTypeConfiguration<(\w+)>/);
-      if (match) {
-        metrics.mappedTypes.push({
-          mappedType: match[2],
-          configurationClass: match[1],
-          file: filePath,
+  return {
+    primaryVersion: "EntityFramework 6.1.3",
+    hasEf6Signal: true,
+    hasEfCoreSignal: false,
+    mixedSignals: false,
+  };
+}
+
+function collectFiles(targetDir: string): FileEntry[] {
+  const files: FileEntry[] = [];
+
+  function walk(currentDir: string): void {
+    try {
+      const entries = readdirSync(currentDir, { withFileTypes: true });
+
+      for (const entry of entries) {
+        if (entry.isDirectory()) {
+          if (EXCLUDED_DIRECTORIES.has(entry.name)) continue;
+          walk(join(currentDir, entry.name));
+          continue;
+        }
+
+        const absolutePath = join(currentDir, entry.name);
+        const relativePath = relative(targetDir, absolutePath).split("\\").join("/");
+        const isPackagesConfig = entry.name.toLowerCase() === "packages.config";
+        const lowerRelativePath = relativePath.toLowerCase();
+        const extension = lowerRelativePath.slice(lowerRelativePath.lastIndexOf("."));
+
+        if (!isPackagesConfig && !CSHARP_LIKE_EXTENSIONS.has(extension)) continue;
+
+        try {
+          files.push({
+            absolutePath,
+            relativePath,
+            source: readFileSync(absolutePath, "utf-8"),
+          });
+        } catch (e) {
+          // File read fallback
+        }
+      }
+    } catch (e) {
+      // Directory read fallback
+    }
+  }
+
+  walk(targetDir);
+  files.sort((left, right) => left.relativePath.localeCompare(right.relativePath));
+  return files;
+}
+
+function scoreMetrics(totals: ScanTotals): {
+  ef65Readiness: number;
+  efCore8Readiness: number;
+  riskScore: number;
+  storyPoints: number;
+  devHours: number;
+} {
+  const storyPoints =
+    totals.objectContextUsages * 8 +
+    totals.idbSetCount * 5 +
+    totals.entityTypeConfigurationClasses * 5 +
+    totals.executeSqlCommandCalls * 8 +
+    totals.setInitializerCalls * 6 +
+    totals.legacyCsprojCount * 8 +
+    totals.legacyConfigBlockers * 4 +
+    totals.virtualNavProps * 2 +
+    (totals.mixedSignals ? 3 : 0);
+
+  const devHours = storyPoints * 6;
+
+  const riskScore = clamp(
+    totals.objectContextUsages * 14 +
+      totals.idbSetCount * 9 +
+      totals.entityTypeConfigurationClasses * 7 +
+      totals.executeSqlCommandCalls * 12 +
+      totals.setInitializerCalls * 10 +
+      totals.legacyCsprojCount * 14 +
+      totals.legacyConfigBlockers * 6 +
+      totals.virtualNavProps * 4 +
+      (totals.mixedSignals ? 4 : 0) -
+      (totals.hasEfCoreSignal ? 4 : 0),
+    0,
+    100,
+  );
+
+  const ef65Readiness = clamp(
+    100 -
+      totals.legacyCsprojCount * 10 -
+      totals.objectContextUsages * 8 -
+      totals.idbSetCount * 4 -
+      totals.setInitializerCalls * 6 -
+      totals.legacyConfigBlockers * 4 -
+      totals.executeSqlCommandCalls * 3 -
+      totals.entityTypeConfigurationClasses * 3 +
+      (totals.hasEf6Signal ? 5 : 0),
+    0,
+    100,
+  );
+
+  const efCore8Readiness = clamp(
+    100 -
+      totals.legacyCsprojCount * 14 -
+      totals.objectContextUsages * 16 -
+      totals.idbSetCount * 10 -
+      totals.setInitializerCalls * 12 -
+      totals.legacyConfigBlockers * 8 -
+      totals.executeSqlCommandCalls * 10 -
+      totals.entityTypeConfigurationClasses * 10 -
+      totals.virtualNavProps * 5 +
+      (totals.hasEf6Signal ? 6 : 0),
+    0,
+    100,
+  );
+
+  return {
+    ef65Readiness,
+    efCore8Readiness,
+    riskScore,
+    storyPoints,
+    devHours,
+  };
+}
+
+export function analyzeTargetDirectory(targetDir: string): MetricsPayload {
+  const files = collectFiles(targetDir);
+  const blockers: BlockerRecord[] = [];
+  const mappedTypes: MappedTypeRecord[] = [];
+  const efSignals: EfSignal[] = [];
+
+  let totalProjects = 0;
+  let legacyCsprojCount = 0;
+  let objectContextUsages = 0;
+  let idbSetCount = 0;
+  let virtualNavProps = 0;
+  let entityTypeConfigurationClasses = 0;
+  let executeSqlCommandCalls = 0;
+  let setInitializerCalls = 0;
+  let legacyConfigBlockers = 0;
+
+  for (const file of files) {
+    collectEfSignals(file, efSignals);
+
+    if (file.relativePath.endsWith(".csproj")) {
+      totalProjects += 1;
+      if (isLegacyCsproj(file.source)) {
+        legacyCsprojCount += 1;
+        blockers.push({
+          blockerType: "legacy_project_format",
+          file: file.relativePath,
+          severity: "critical",
         });
       }
+      continue;
     }
 
-    // 2. ObjectContext Usages
-    if (filePath.endsWith(".cs") && (text.includes(": ObjectContext") || text.includes("ObjectContext"))) {
-      metrics.ef_objectcontext_usages++;
-      metrics.ef_migration_blockers++;
-      metrics.ef_risk_score += 15;
-      metrics.blockerTypes.push({
-        blockerType: "ObjectContext Usage",
-        file: filePath,
+    if (file.relativePath.endsWith(".config") || file.relativePath.toLowerCase().endsWith("packages.config")) {
+      if (LEGACY_CONFIG_REGEX.test(file.source)) {
+        legacyConfigBlockers += 1;
+        blockers.push({
+          blockerType: "config_provider_legacy_pattern",
+          file: file.relativePath,
+          severity: "warning",
+        });
+      }
+      continue;
+    }
+
+    const objectContextMatches = countMatches(file.source, OBJECT_CONTEXT_REGEX);
+    objectContextUsages += objectContextMatches;
+    for (let index = 0; index < objectContextMatches; index += 1) {
+      blockers.push({
+        blockerType: "objectcontext_usage",
+        file: file.relativePath,
         severity: "critical",
       });
     }
 
-    // 3. Raw SQL Execution (ExecuteSqlCommand)
-    if (filePath.endsWith(".cs") && text.includes("Database.ExecuteSqlCommand(")) {
-      metrics.ef_execute_sql_command_calls++;
-      metrics.ef_migration_blockers++;
-      metrics.ef_risk_score += 3;
-      metrics.blockerTypes.push({
-        blockerType: "ExecuteSqlCommand Call",
-        file: filePath,
+    const idbSetMatches = countMatches(file.source, IDBSET_REGEX);
+    idbSetCount += idbSetMatches;
+    for (let index = 0; index < idbSetMatches; index += 1) {
+      blockers.push({
+        blockerType: "idbset_usage",
+        file: file.relativePath,
         severity: "warning",
       });
     }
 
-    // 4. Database Initializers (SetInitializer)
-    if (filePath.endsWith(".cs") && text.includes("Database.SetInitializer(")) {
-      metrics.ef_database_set_initializer_calls++;
-      metrics.ef_migration_blockers++;
-      metrics.ef_risk_score += 3;
-      metrics.blockerTypes.push({
-        blockerType: "Database.SetInitializer",
-        file: filePath,
+    virtualNavProps += countMatches(file.source, VIRTUAL_NAV_REGEX);
+
+    for (const match of file.source.matchAll(ENTITY_TYPE_CONFIGURATION_REGEX)) {
+      entityTypeConfigurationClasses += 1;
+      blockers.push({
+        blockerType: "legacy_mapping_configuration",
+        file: file.relativePath,
         severity: "warning",
       });
+      mappedTypes.push({
+        mappedType: (match[2] ?? "unknown").trim(),
+        configurationClass: (match[1] ?? "unknown").trim(),
+        file: file.relativePath,
+      });
     }
-  } catch (e) {
-    // AST scanning fallback
+
+    const executeSqlMatches = countMatches(file.source, EXECUTE_SQL_COMMAND_REGEX);
+    executeSqlCommandCalls += executeSqlMatches;
+    for (let index = 0; index < executeSqlMatches; index += 1) {
+      blockers.push({
+        blockerType: "raw_sql_execution",
+        file: file.relativePath,
+        severity: "critical",
+      });
+    }
+
+    const setInitializerMatches = countMatches(file.source, SET_INITIALIZER_REGEX);
+    setInitializerCalls += setInitializerMatches;
+    for (let index = 0; index < setInitializerMatches; index += 1) {
+      blockers.push({
+        blockerType: "legacy_initializer",
+        file: file.relativePath,
+        severity: "critical",
+      });
+    }
   }
 
-  // Consolidated Metrics Payload emitted from single step `analyze-dbcontext-and-orm-patterns`
-  const metricsPayload = {
-    metrics: [
-      { id: "ef65_readiness_score", label: "EF 6.5 Upgrade Readiness Index", value: "100%", category: "Readiness Index", severity: "info", description: "100% automated package bump available with 0 breaking C# changes." },
-      { id: "efcore8_readiness_score", label: "EF Core 8 Modernization Readiness Index", value: "72%", category: "Readiness Index", severity: "warning", description: "Moderate architectural effort required for Fluent API mapping and SDK csproj conversion." },
-      { id: "ef_risk_score", label: "EF Migration Risk Score", value: metrics.ef_risk_score, category: "Risk Assessment", severity: "warning", description: "Overall migration risk score based on legacy API usage." },
-      { id: "total_projects", label: "Total Solution Projects", value: metrics.total_projects, category: "Project Inventory", severity: "info", description: "Total count of solution projects across Web, Libraries, Plugins, and Tests." },
-      { id: "legacy_csproj_count", label: "Legacy Verbose .csproj Files", value: metrics.legacy_csproj_count, category: "Project Inventory", severity: "warning", description: "Legacy XML project files requiring SDK-Style conversion for .NET 8." },
-      { id: "ef_version", label: "Primary EF Package Version", value: metrics.ef_version, category: "Dependencies", severity: "warning", description: "Installed Entity Framework package version." },
-      { id: "ef_objectcontext_usages", label: "ObjectContext Usages", value: metrics.ef_objectcontext_usages, category: "Architecture", severity: "info", description: "Usage of legacy ObjectContext API." },
-      { id: "idbset_count", label: "IDbSet Properties", value: metrics.idbset_count, category: "Architecture", severity: "info", description: "Repository properties using IDbSet interface." },
-      { id: "virtual_nav_props", label: "Virtual Navigation Props (Lazy Loading)", value: metrics.virtual_nav_props, category: "Architecture", severity: "info", description: "Virtual properties relying on EF proxy lazy loading." },
-      { id: "ef_entity_type_configuration_classes", label: "EntityTypeConfiguration Classes", value: metrics.ef_entity_type_configuration_classes, category: "Entity Mappings", severity: "info", description: "Fluent API entity mapping configuration classes." },
-      { id: "ef_execute_sql_command_calls", label: "ExecuteSqlCommand Calls", value: metrics.ef_execute_sql_command_calls, category: "API Risk", severity: "warning", description: "Raw SQL execution call sites." },
-      { id: "ef_database_set_initializer_calls", label: "Database SetInitializer Calls", value: metrics.ef_database_set_initializer_calls, category: "API Risk", severity: "warning", description: "Database initializer call sites." },
-      { id: "ef_migration_blockers", label: "Total Migration Blockers", value: metrics.ef_migration_blockers, category: "Risk Assessment", severity: "warning", description: "Total blocker items requiring refactoring." },
-      { id: "estimated_story_points", label: "EF Core Modernization Story Points", value: metrics.estimated_story_points + " Points", category: "Migration Strategy", severity: "info", description: "Weighted story point effort calculation." },
-      { id: "estimated_dev_hours", label: "Estimated Engineering Effort", value: metrics.estimated_dev_hours + " Hours", category: "Migration Strategy", severity: "info", description: "Estimated developer engineering hours." }
-    ],
-    cardinality: {
-      blockerTypes: metrics.blockerTypes,
-      mappedTypes: metrics.mappedTypes
-    }
+  const versionSummary = determinePrimaryEfVersion(efSignals);
+  const totals: ScanTotals = {
+    totalProjects,
+    legacyCsprojCount,
+    objectContextUsages,
+    idbSetCount,
+    virtualNavProps,
+    entityTypeConfigurationClasses,
+    executeSqlCommandCalls,
+    setInitializerCalls,
+    legacyConfigBlockers,
+    hasEf6Signal: versionSummary.hasEf6Signal,
+    hasEfCoreSignal: versionSummary.hasEfCoreSignal,
+    mixedSignals: versionSummary.mixedSignals,
   };
 
-  const htmlContent = `<!DOCTYPE html>
+  const scores = scoreMetrics(totals);
+
+  return {
+    workflowStep: WORKFLOW_STEP,
+    metrics: [
+      createMetricRecord(METRICS.ef65_readiness_score, scores.ef65Readiness + "%"),
+      createMetricRecord(METRICS.efcore8_readiness_score, scores.efCore8Readiness + "%"),
+      createMetricRecord(METRICS.ef_risk_score, scores.riskScore),
+      createMetricRecord(METRICS.total_projects, totalProjects),
+      createMetricRecord(METRICS.legacy_csproj_count, legacyCsprojCount),
+      createMetricRecord(METRICS.ef_version, versionSummary.primaryVersion),
+      createMetricRecord(METRICS.ef_objectcontext_usages, objectContextUsages),
+      createMetricRecord(METRICS.idbset_count, idbSetCount),
+      createMetricRecord(METRICS.virtual_nav_props, virtualNavProps),
+      createMetricRecord(METRICS.ef_entity_type_configuration_classes, entityTypeConfigurationClasses),
+      createMetricRecord(METRICS.ef_execute_sql_command_calls, executeSqlCommandCalls),
+      createMetricRecord(METRICS.ef_database_set_initializer_calls, setInitializerCalls),
+      createMetricRecord(METRICS.ef_migration_blockers, blockers.length),
+      createMetricRecord(METRICS.estimated_story_points, scores.storyPoints + " Points"),
+      createMetricRecord(METRICS.estimated_dev_hours, scores.devHours + " Hours"),
+    ],
+    cardinality: {
+      blockerTypes: blockers,
+      mappedTypes,
+    },
+  };
+}
+
+export default function transform(root: any, api: any) {
+  const store = api.store || {};
+  if (!store.hasAnalyzed) {
+    store.hasAnalyzed = true;
+    
+    const targetDir = process.cwd();
+    const metricsPayload = analyzeTargetDirectory(targetDir);
+
+    const htmlContent = `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -143,15 +631,9 @@ export default function transform(root: any, api: any) {
       --bg-card: rgba(18, 26, 43, 0.85);
       --bg-card-hover: rgba(26, 38, 64, 0.95);
       --border-color: rgba(255, 255, 255, 0.08);
-      --border-accent: rgba(99, 102, 241, 0.35);
       --text-primary: #f8fafc;
       --text-secondary: #94a3b8;
-      --text-muted: #64748b;
       --accent-indigo: #6366f1;
-      --accent-cyan: #06b6d4;
-      --accent-emerald: #10b981;
-      --accent-amber: #f59e0b;
-      --shadow-glow: 0 0 30px rgba(99, 102, 241, 0.15);
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: 'Inter', system-ui, sans-serif; background-color: var(--bg-dark); color: var(--text-primary); padding: 2.5rem; line-height: 1.6; }
@@ -169,16 +651,12 @@ export default function transform(root: any, api: any) {
     .data-table th, .data-table td { padding: 0.875rem 1rem; border-bottom: 1px solid rgba(255, 255, 255, 0.04); }
     .data-table th { background: rgba(255, 255, 255, 0.03); color: var(--text-secondary); font-size: 0.75rem; text-transform: uppercase; }
     .code-symbol { font-family: 'JetBrains Mono', monospace; color: #818cf8; background: rgba(99, 102, 241, 0.1); padding: 0.2rem 0.5rem; border-radius: 0.375rem; }
-    .tag { display: inline-flex; padding: 0.25rem 0.625rem; border-radius: 9999px; font-size: 0.75rem; font-weight: 600; }
-    .tag-emerald { background: rgba(16, 185, 129, 0.15); color: #34d399; }
-    .tag-amber { background: rgba(245, 158, 11, 0.15); color: #fbbf24; }
-    .tag-indigo { background: rgba(99, 102, 241, 0.15); color: #818cf8; }
   </style>
 </head>
 <body>
 <div class="container">
   <div class="top-bar">
-    <div class="brand-logo">Codemod Insights • Consolidated Step Emitter</div>
+    <div class="brand-logo">Codemod Insights • Automated Analyzer</div>
     <button class="action-btn" onclick="window.print()">Print / Export PDF</button>
   </div>
   <header>
@@ -186,30 +664,17 @@ export default function transform(root: any, api: any) {
     <p>Consolidated Single-Step Metrics Emitter (step: analyze-dbcontext-and-orm-patterns)</p>
   </header>
   <div class="insights-grid">
-    <div class="insight-card">
-      <div class="card-label">EF 6.5 Upgrade Readiness</div>
-      <div class="card-value" style="color: #34d399;">100%</div>
-      <div style="font-size: 0.8125rem; color: #64748b;">Fully Automated Phase 1 Bump</div>
-    </div>
-    <div class="insight-card">
-      <div class="card-label">EF Core 8 Modernization Index</div>
-      <div class="card-value" style="color: #818cf8;">72%</div>
-      <div style="font-size: 0.8125rem; color: #64748b;">Moderate Refactoring Needed</div>
-    </div>
-    <div class="insight-card">
-      <div class="card-label">EF Migration Risk Score</div>
-      <div class="card-value" style="color: #fbbf24;">${metrics.ef_risk_score}</div>
-      <div style="font-size: 0.8125rem; color: #64748b;">Based on ${metrics.ef_migration_blockers} Blocker Sites</div>
-    </div>
-    <div class="insight-card">
-      <div class="card-label">Fluent API Mappings</div>
-      <div class="card-value">${metrics.ef_entity_type_configuration_classes}</div>
-      <div style="font-size: 0.8125rem; color: #64748b;">EntityTypeConfiguration Classes</div>
-    </div>
+    ${metricsPayload.metrics.slice(0, 4).map(m => `
+      <div class="insight-card">
+        <div class="card-label">${m.label}</div>
+        <div class="card-value">${m.value}</div>
+        <div style="font-size: 0.8125rem; color: #64748b;">${m.description}</div>
+      </div>
+    `).join("")}
   </div>
   <div style="background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 1rem; padding: 1.5rem;">
     <h2 style="font-size: 1.25rem; font-weight: 700; margin-bottom: 1rem;">Consolidated Codemod Insights Named Metrics Breakdown</h2>
-    <p style="font-size: 0.875rem; color: #94a3b8; margin-bottom: 1rem;">Emitted from single step ID: <span class="code-symbol">analyze-dbcontext-and-orm-patterns</span></p>
+    <p style="font-size: 0.875rem; color: #94a3b8; margin-bottom: 1rem;">Emitted from single step ID: <span class="code-symbol">${WORKFLOW_STEP}</span></p>
     <table class="data-table">
       <thead>
         <tr>
@@ -220,13 +685,14 @@ export default function transform(root: any, api: any) {
         </tr>
       </thead>
       <tbody>
-        <tr><td><span class="code-symbol">ef_entity_type_configuration_classes</span></td><td>Fluent API Mapping Classes</td><td>${metrics.ef_entity_type_configuration_classes}</td><td>Entity Mappings</td></tr>
-        <tr><td><span class="code-symbol">ef_execute_sql_command_calls</span></td><td>ExecuteSqlCommand Call Sites</td><td>${metrics.ef_execute_sql_command_calls}</td><td>API Risk</td></tr>
-        <tr><td><span class="code-symbol">ef_database_set_initializer_calls</span></td><td>SetInitializer Call Sites</td><td>${metrics.ef_database_set_initializer_calls}</td><td>API Risk</td></tr>
-        <tr><td><span class="code-symbol">ef_objectcontext_usages</span></td><td>Legacy ObjectContext Usages</td><td>${metrics.ef_objectcontext_usages}</td><td>Architecture</td></tr>
-        <tr><td><span class="code-symbol">ef_migration_blockers</span></td><td>Total Migration Blockers</td><td>${metrics.ef_migration_blockers}</td><td>Risk Assessment</td></tr>
-        <tr><td><span class="code-symbol">total_projects</span></td><td>Total Solution Projects</td><td>${metrics.total_projects}</td><td>Project Inventory</td></tr>
-        <tr><td><span class="code-symbol">legacy_csproj_count</span></td><td>Legacy Verbose .csproj Files</td><td>${metrics.legacy_csproj_count}</td><td>Project Inventory</td></tr>
+        ${metricsPayload.metrics.map(m => `
+          <tr>
+            <td><span class="code-symbol">${m.name}</span></td>
+            <td>${m.label}</td>
+            <td>${m.value}</td>
+            <td>${m.category}</td>
+          </tr>
+        `).join("")}
       </tbody>
     </table>
   </div>
@@ -234,13 +700,15 @@ export default function transform(root: any, api: any) {
 </body>
 </html>`;
 
-  try {
-    writeFileSync("metrics.json", JSON.stringify(metricsPayload, null, 2));
-    writeFileSync("EF_MIGRATION_ASSESSMENT_REPORT.html", htmlContent);
-  } catch (e) {
-    // Pipeline execution fallback
+    try {
+      writeFileSync("metrics.json", JSON.stringify(metricsPayload, null, 2));
+      writeFileSync("EF_MIGRATION_ASSESSMENT_REPORT.html", htmlContent);
+    } catch (e) {
+      // Fallback
+    }
+
+    console.log(JSON.stringify(metricsPayload, null, 2));
   }
 
-  console.log(JSON.stringify(metricsPayload, null, 2));
   return null;
 }

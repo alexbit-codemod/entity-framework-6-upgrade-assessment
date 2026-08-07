@@ -1,8 +1,8 @@
 schema_version: "1.0"
 
 name: "bytestrone-ef-migration-assessment-bundle"
-version: "1.0.9"
-description: "Consolidated single-step Codemod Insights metrics emitter scanning .NET solutions for all metrics under step analyze-dbcontext-and-orm-patterns."
+version: "1.0.10"
+description: "Dynamic AST analyzer & consolidated single-step Codemod Insights metrics emitter for EF migration readiness."
 author: "bijo abraham"
 license: "MIT"
 
