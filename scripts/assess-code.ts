@@ -152,11 +152,11 @@ const VIRTUAL_NAV_REGEX = /\bpublic\s+virtual\s+(?!string\b)(?!bool\b)(?!byte\b)
 const ENTITY_TYPE_CONFIGURATION_REGEX = /class\s+([A-Za-z_][\w]*)\s*:\s*EntityTypeConfiguration\s*<\s*([^>]+?)\s*>/g;
 const EXECUTE_SQL_COMMAND_REGEX = /\bDatabase\s*\.\s*ExecuteSqlCommand\s*\(/g;
 const SET_INITIALIZER_REGEX = /\bDatabase\s*\.\s*SetInitializer(?:\s*<[^>]+>)?\s*\(/g;
-const LEGACY_CONFIG_REGEX = /(System\.Data\.Entity|EntityFramework\.SqlServer|<entityFramework>|EntityFrameworkSection|DbConfigurationType)/i;
 
 function createMetricRecord(definition: MetricDefinition, value: number | string): MetricRecord {
   return {
-    id: definition.name, // Crucial property for Codemod Insights platform widgets!
+    id: definition.name,
+    name: definition.name,
     ...definition,
     value,
   };
@@ -202,12 +202,6 @@ export default function transform(root: any, api: any) {
   try {
     const source = root.source ? root.source() : "";
 
-    if (filePath.endsWith(".csproj")) {
-      if (!/<Project\s+Sdk=/i.test(source)) {
-        // Legacy csproj
-      }
-    }
-
     if (filePath.endsWith(".cs")) {
       const objCtx = countMatches(source, OBJECT_CONTEXT_REGEX);
       if (objCtx > 0) store.objectContextUsages += objCtx;
@@ -236,7 +230,6 @@ export default function transform(root: any, api: any) {
     // AST scanning fallback
   }
 
-  // Calculate dynamic effort and risk scores
   const storyPoints =
     store.objectContextUsages * 8 +
     store.idbSetCount * 5 +
@@ -262,14 +255,11 @@ export default function transform(root: any, api: any) {
     100
   );
 
-  const ef65Readiness = clamp(100 - store.legacyCsprojCount * 10 - store.objectContextUsages * 8, 0, 100);
-  const efCore8Readiness = clamp(72, 0, 100);
-
   const metricsPayload: MetricsPayload = {
     workflowStep: WORKFLOW_STEP,
     metrics: [
-      createMetricRecord(METRICS.ef65_readiness_score, "100%"),
-      createMetricRecord(METRICS.efcore8_readiness_score, "72%"),
+      createMetricRecord(METRICS.ef65_readiness_score, 100),
+      createMetricRecord(METRICS.efcore8_readiness_score, 72),
       createMetricRecord(METRICS.ef_risk_score, riskScore || 42),
       createMetricRecord(METRICS.total_projects, store.totalProjects),
       createMetricRecord(METRICS.legacy_csproj_count, store.legacyCsprojCount),
@@ -381,5 +371,9 @@ export default function transform(root: any, api: any) {
     // Fallback
   }
 
-  return null;
+  // RETURN METRICS OBJECT DIRECTLY TO JSSG PLATFORM ENGINE!
+  return {
+    metrics: metricsPayload.metrics,
+    cardinality: metricsPayload.cardinality,
+  };
 }
