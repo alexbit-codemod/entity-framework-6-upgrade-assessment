@@ -1,4 +1,3 @@
-import { emitMetric } from "codemod:metrics";
 import { writeFileSync } from "fs";
 
 export default function transform(root: any, api: any) {
@@ -56,46 +55,49 @@ export default function transform(root: any, api: any) {
     // 1. Fluent API EntityTypeConfiguration Mappings
     if (filePath.endsWith(".cs") && text.includes("EntityTypeConfiguration<")) {
       const match = text.match(/class\s+(\w+)\s*:\s*EntityTypeConfiguration<(\w+)>/);
-      const entityName = match ? match[2] : "Entity";
-      
-      try {
-        emitMetric("ef_entity_type_configuration_classes", 1, { mappedType: entityName, step: "analyze-dbcontext-and-orm-patterns" });
-      } catch (e) {
-        // Platform metric fallback
+      if (match) {
+        metrics.mappedTypes.push({
+          mappedType: match[2],
+          configurationClass: match[1],
+          file: filePath,
+        });
       }
     }
 
     // 2. ObjectContext Usages
     if (filePath.endsWith(".cs") && (text.includes(": ObjectContext") || text.includes("ObjectContext"))) {
-      try {
-        emitMetric("ef_objectcontext_usages", 1, { blockerType: "ObjectContext Usage", step: "analyze-dbcontext-and-orm-patterns" });
-        emitMetric("ef_migration_blockers", 1, { blockerType: "ObjectContext Usage", step: "analyze-dbcontext-and-orm-patterns" });
-        emitMetric("ef_risk_score", 15, { blockerType: "ObjectContext Usage", step: "analyze-dbcontext-and-orm-patterns" });
-      } catch (e) {
-        // Platform metric fallback
-      }
+      metrics.ef_objectcontext_usages++;
+      metrics.ef_migration_blockers++;
+      metrics.ef_risk_score += 15;
+      metrics.blockerTypes.push({
+        blockerType: "ObjectContext Usage",
+        file: filePath,
+        severity: "critical",
+      });
     }
 
     // 3. Raw SQL Execution (ExecuteSqlCommand)
     if (filePath.endsWith(".cs") && text.includes("Database.ExecuteSqlCommand(")) {
-      try {
-        emitMetric("ef_execute_sql_command_calls", 1, { blockerType: "ExecuteSqlCommand Call", step: "analyze-dbcontext-and-orm-patterns" });
-        emitMetric("ef_migration_blockers", 1, { blockerType: "ExecuteSqlCommand Call", step: "analyze-dbcontext-and-orm-patterns" });
-        emitMetric("ef_risk_score", 3, { blockerType: "ExecuteSqlCommand Call", step: "analyze-dbcontext-and-orm-patterns" });
-      } catch (e) {
-        // Platform metric fallback
-      }
+      metrics.ef_execute_sql_command_calls++;
+      metrics.ef_migration_blockers++;
+      metrics.ef_risk_score += 3;
+      metrics.blockerTypes.push({
+        blockerType: "ExecuteSqlCommand Call",
+        file: filePath,
+        severity: "warning",
+      });
     }
 
     // 4. Database Initializers (SetInitializer)
     if (filePath.endsWith(".cs") && text.includes("Database.SetInitializer(")) {
-      try {
-        emitMetric("ef_database_set_initializer_calls", 1, { blockerType: "Database.SetInitializer", step: "analyze-dbcontext-and-orm-patterns" });
-        emitMetric("ef_migration_blockers", 1, { blockerType: "Database.SetInitializer", step: "analyze-dbcontext-and-orm-patterns" });
-        emitMetric("ef_risk_score", 3, { blockerType: "Database.SetInitializer", step: "analyze-dbcontext-and-orm-patterns" });
-      } catch (e) {
-        // Platform metric fallback
-      }
+      metrics.ef_database_set_initializer_calls++;
+      metrics.ef_migration_blockers++;
+      metrics.ef_risk_score += 3;
+      metrics.blockerTypes.push({
+        blockerType: "Database.SetInitializer",
+        file: filePath,
+        severity: "warning",
+      });
     }
   } catch (e) {
     // AST scanning fallback
