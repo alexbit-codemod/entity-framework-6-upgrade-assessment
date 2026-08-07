@@ -1,6 +1,6 @@
-# bytestrone-ef-migration-assessment-bundle (v1.1.0)
+# entity-framework-6-upgrade-assessment (v1.1.0)
 
-Read-only EF6 migration assessment package. It mines common Entity Framework 6 patterns in C# sources and emits **native JSSG metrics** (`codemod:metrics`) — no code edits and no ad-hoc output files.
+Read-only Entity Framework 6 upgrade assessment package. It mines common EF6 patterns in C# sources and emits **native JSSG metrics** (`codemod:metrics`) — no code edits and no ad-hoc output files.
 
 ## Architecture
 
